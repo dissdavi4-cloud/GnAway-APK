@@ -1,0 +1,97 @@
+
+name: Android APK rebuild attempt
+
+on:
+  workflow_dispatch:
+    inputs:
+      apk_path:
+        description: 'APK path in repository (default: Berlin-original.apk)'
+        required: false
+        default: 'Berlin-original.apk'
+
+permissions:
+  contents: read
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apktool zip unzip apksigner
+          mkdir -p build logs
+
+      - name: Check input APK
+        env:
+          APK_PATH: ${{ inputs.apk_path }}
+        run: |
+          test -f "$APK_PATH" || {
+            echo "APK not found: $APK_PATH"
+            exit 1
+          }
+          file "$APK_PATH" | tee logs/input.txt
+          unzip -t "$APK_PATH" | tee logs/zip-check.txt
+
+      - name: Decode APK
+        env:
+          APK_PATH: ${{ inputs.apk_path }}
+        run: |
+          apktool d -f "$APK_PATH" -o build/decoded \
+            2>&1 | tee logs/apktool-decode.txt
+
+      - name: Attempt editable branding replacement
+        run: |
+          python3 scripts/patch_branding.py build/decoded \
+            | tee logs/patch-report.txt
+
+      - name: Rebuild APK
+        run: |
+          apktool b build/decoded -o build/unsigned.apk \
+            2>&1 | tee logs/apktool-build.txt
+
+      - name: Create temporary signing key and sign
+        run: |
+          keytool -genkeypair -v \
+            -keystore build/temp.keystore \
+            -storepass android \
+            -keypass android \
+            -alias build \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname 'CN=gnaway0, OU=Build, O=Build, L=Unknown, S=Unknown, C=BR'
+
+          apksigner sign \
+            --ks build/temp.keystore \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out build/Berlin-gnaway0.apk \
+            build/unsigned.apk
+
+          apksigner verify --verbose build/Berlin-gnaway0.apk \
+            | tee logs/sign-verify.txt
+
+          unzip -t build/Berlin-gnaway0.apk \
+            | tee logs/final-zip-check.txt
+
+      - name: Upload APK and diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-output
+          path: |
+            build/Berlin-gnaway0.apk
+            logs/
+          if-no-files-found: warn

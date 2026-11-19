@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       apk_path:
-        description: 'APK path in repository (default: Berlin-original.apk)'
+        description: 'APK path'
         required: false
         default: 'Berlin-original.apk'
 
@@ -41,6 +41,7 @@ jobs:
             echo "APK not found: $APK_PATH"
             exit 1
           }
+
           file "$APK_PATH" | tee logs/input.txt
           unzip -t "$APK_PATH" | tee logs/zip-check.txt
 
@@ -51,7 +52,7 @@ jobs:
           apktool d -f "$APK_PATH" -o build/decoded \
             2>&1 | tee logs/apktool-decode.txt
 
-      - name: Attempt editable branding replacement
+      - name: Attempt branding replacement
         run: |
           python3 scripts/patch_branding.py build/decoded \
             | tee logs/patch-report.txt
@@ -61,7 +62,7 @@ jobs:
           apktool b build/decoded -o build/unsigned.apk \
             2>&1 | tee logs/apktool-build.txt
 
-      - name: Create temporary signing key and sign
+      - name: Sign APK
         run: |
           keytool -genkeypair -v \
             -keystore build/temp.keystore \
@@ -71,7 +72,7 @@ jobs:
             -keyalg RSA \
             -keysize 2048 \
             -validity 10000 \
-            -dname 'CN=gnaway0, OU=Build, O=Build, L=Unknown, S=Unknown, C=BR'
+            -dname 'CN=gnaway0, O=Build, C=BR'
 
           apksigner sign \
             --ks build/temp.keystore \
@@ -80,13 +81,11 @@ jobs:
             --out build/Berlin-gnaway0.apk \
             build/unsigned.apk
 
-          apksigner verify --verbose build/Berlin-gnaway0.apk \
-            | tee logs/sign-verify.txt
+          apksigner verify --verbose build/Berlin-gnaway0.apk
 
-          unzip -t build/Berlin-gnaway0.apk \
-            | tee logs/final-zip-check.txt
+          unzip -t build/Berlin-gnaway0.apk
 
-      - name: Upload APK and diagnostic logs
+      - name: Upload APK and logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
